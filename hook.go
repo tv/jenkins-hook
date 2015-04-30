@@ -1,36 +1,45 @@
 package main
 
 import (
+	"github.com/codegangsta/negroni"
+	"github.com/julienschmidt/httprouter"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 )
 
-func sameHost(handler http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.Host = r.URL.Host
-		handler.ServeHTTP(w, r)
-	})
+func setSameHost(rw http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
+	r.Host = r.URL.Host
+	next(rw, r)
 }
 
 func main() {
 
-	urlRoot := os.Getenv("URL_ROOT")
+	urlRoot := os.Getenv("JENKINS_ROOT")
 	if urlRoot == "" {
-		urlRoot = "http://localhost/github-webhook"
+		urlRoot = "http://localhost"
 	}
-
-	serverUrl, _ := url.Parse(urlRoot)
-
-	reverseProxy := httputil.NewSingleHostReverseProxy(serverUrl)
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	api := sameHost(reverseProxy)
+	serverUrlJenkins, _ := url.Parse(urlRoot)
 
-	http.ListenAndServe(":"+port, api)
+	reverseProxyJenkins := httputil.NewSingleHostReverseProxy(serverUrlJenkins)
+
+	r := httprouter.New()
+
+	for _, url := range []string{"/github-webhook/*all", "/ghprbhook/*all"} {
+		for _, val := range []string{"GET", "POST", "PUT"} {
+			r.Handler(val, url, reverseProxyJenkins)
+		}
+	}
+
+	n := negroni.Classic()
+	n.Use(negroni.HandlerFunc(setSameHost))
+	n.UseHandler(r)
+	n.Run(":" + port)
 }
